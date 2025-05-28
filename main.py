@@ -1,7 +1,7 @@
 
 """
-Telegram Bot: TirzGirlsBot (Topic-Specific with message_thread_id Support)
-Summarizes only messages from the same Telegram Topic (thread).
+Telegram Bot: TirzGirlsBot (OpenAI v1 Fix + Topic-Aware)
+Summarizes messages only from the same Telegram topic using OpenAI 1.x SDK.
 """
 
 import os
@@ -10,11 +10,10 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-import openai
+from openai import OpenAI
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -40,7 +39,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_history[chat_id][thread_id].append((ts, msg, user))
 
-    # Trim messages older than 3 hours
+    # Trim older messages
     cutoff = datetime.now(timezone.utc) - timedelta(hours=3)
     chat_history[chat_id][thread_id] = [
         m for m in chat_history[chat_id][thread_id] if m[0] > cutoff
@@ -82,7 +81,7 @@ Here is the conversation:
 Summarize what was said."""
 
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
         )
@@ -95,7 +94,7 @@ Summarize what was said."""
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "/tldr [time] — Summarize recent messages (up to 3h, same topic only)\n"
+        "/tldr [time] — Summarize recent messages (same topic only)\n"
         "/clearhistory — Clear this topic’s message history\n"
         "/help — Show this message"
     )

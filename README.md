@@ -1,3 +1,3 @@
-# TirzGirlsBot (Topic-Specific)
+# TirzGirlsBot (OpenAI v1 Fixed + Topic Support)
 
-This version only summarizes messages from the current Telegram Topic (thread), supports /tldr, and clears history per topic.
+Summarizes only within a Telegram topic using the updated OpenAI API format.
