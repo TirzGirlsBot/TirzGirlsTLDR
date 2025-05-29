@@ -26,13 +26,19 @@ chat_history = {}
 warned_threads = set()
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    key = (update.effective_chat.id, update.message.message_thread_id or 0)
+    chat_history.setdefault(key, []).append(update.message)
     msg = update.message
     if not msg or not msg.text:
         return
     text = msg.text
     bot_username = context.bot.username.lower()
     if f"@{bot_username}" in text.lower():
-        prompt = text.replace(f"@{bot_username}", "").strip()
+        prompt = text.replace(f"@{bot_username}", "")
+    key = (update.effective_chat.id, update.message.message_thread_id or 0)
+    recent_msgs = chat_history.get(key, [])[-5:]
+    thread_summary = "Recent convo: " + " | ".join(m.text for m in recent_msgs if m.text)
+.strip()
         user_name = update.effective_user.first_name or "someone"
         if not prompt:
             await msg.reply_text(f"👀 I’m here, {user_name} — say something cute.")
@@ -41,8 +47,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             completion = client.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are Summaria, a groupchat assistant bot. You know you're a bot, but you talk like a regular. You're witty, helpful, and have great taste — a little glam, a little playful, but never mean. No need to introduce yourself. No third-person talk. Just be casual, warm, and in the loop."},
-                    {"role": "user", "content": f"The user speaking is named {user_name}. {prompt}"}
+                    {"role": "system", "content": "You are Summaria, a group chat bot who talks like a sharp but sweet regular. You're opinionated, supportive, and always paying attention. You remember what people said earlier in the thread and let it influence your responses. You don't repeat facts, you give takes. You're friendly, playful, and clever — not mean or robotic. No third-person talk. Just real replies like you're part of the conversation."},
+                    {"role": "user", "content": f"{thread_summary}. The user speaking is named {user_name}. {prompt}}"}
                 ]
             )
             reply = completion.choices[0].message.content.strip()
@@ -60,7 +66,7 @@ async def ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
             completion = client.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are Summaria, a slightly shady but helpful group chat assistant. Speak like you're part of the crew."},
+                    {"role": "system", "content": "You are Summaria, a group chat bot who talks like a sharp but sweet regular. You're opinionated, supportive, and always paying attention. You remember what people said earlier in the thread and let it influence your responses. You don't repeat facts, you give takes. You're friendly, playful, and clever — not mean or robotic. No third-person talk. Just real replies like you're part of the conversation."},
                     {"role": "user", "content": query}
                 ]
             )
@@ -189,7 +195,7 @@ async def ai_mention_response(update: Update, context: ContextTypes.DEFAULT_TYPE
             completion = await openai.ChatCompletion.acreate(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You're Summaria, a helpful assistant with a bit of sass and shade."},
+                    {"role": "system", "content": "You are Summaria, a group chat bot who talks like a sharp but sweet regular. You're opinionated, supportive, and always paying attention. You remember what people said earlier in the thread and let it influence your responses. You don't repeat facts, you give takes. You're friendly, playful, and clever — not mean or robotic. No third-person talk. Just real replies like you're part of the conversation."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7
