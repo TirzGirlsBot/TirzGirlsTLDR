@@ -141,10 +141,8 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_text = "\n".join([f"{u}: {t}" for u, t in filtered])
     prompt = (
-        "You're a helpful assistant summarizing a Telegram topic thread.
-"
-        "Only summarize this thread; no emojis or bullets.
-"
+        "You're a helpful assistant summarizing a Telegram topic thread."
+        "Only summarize this thread; no emojis or bullets."
         "Here are the messages:\n"
         + chat_text +
         "\n\nGive a concise, chronological summary."
@@ -204,21 +202,15 @@ application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, a
 
 def help_command(update, context):
     help_text = (
-        "Hey babe, I'm Summaria 💅🏾. Here's what I can do:
+        "Hey babe, I'm Summaria 💅🏾. Here's what I can do:"
 
-"
-        "/tldr — Summarizes the last 3 hours of convo.
-"
-        "/tldr 1h or /tldr 30m — Custom summaries.
-"
-        "/help — You're lookin' at it.
-"
-        "/clearhistory — Wipes what I remember.
+        "/tldr — Summarizes the last 3 hours of convo."
+        "/tldr 1h or /tldr 30m — Custom summaries."
+        "/help — You're lookin' at it."
+        "/clearhistory — Wipes what I remember."
 
-"
-        "I can’t see anything from before I was added or fixed. I ignore pinned messages, system joins, and random bots.
+        "I can’t see anything from before I was added or fixed. I ignore pinned messages, system joins, and random bots."
 
-"
         "Tag me with a question or comment, and if it’s juicy enough, I might respond 🫦"
     )
     context.bot.send_message(chat_id=update.effective_chat.id, text=help_text)
