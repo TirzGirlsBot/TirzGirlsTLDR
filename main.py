@@ -70,7 +70,7 @@ async def ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_or_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
-"Hey babe, I'm Summaria 💅🏾, your thread girl. I keep up with drama, shade, glow-ups, and meltdowns — but only from this convo thread. If you just added me or fixed me, I can't see what happened before. Let’s keep it cute 💖\n\nHere’s what I do, babe:\n• /tldr [time] — I’ll spill the tea on the last 3h (or use 1h, 30m, all)\n• /clearhistory — Forget this convo’s thread\n• @Summaria — Tag me with any tea, drama, or random thought and I’ll respond (with AI 💅🏾)\n\nBut don’t get wild — I only know what I’ve seen since I got here. I can’t look back before I was fixed, and I won’t summarize other threads or groups.\n\nI’m not a genie… *yet*. Stay tuned.
+"""Hey babe, I'm Summaria 💅🏾, your thread girl. I keep up with drama, shade, glow-ups, and meltdowns — but only from this convo thread. If you just added me or fixed me, I can't see what happened before. Let’s keep it cute 💖\n\nHere’s what I do, babe:\n• /tldr [time] — I’ll spill the tea on the last 3h (or use 1h, 30m, all)\n• /clearhistory — Forget this convo’s thread\n• @Summaria — Tag me with any tea, drama, or random thought and I’ll respond (with AI 💅🏾)\n\nBut don’t get wild — I only know what I’ve seen since I got here. I can’t look back before I was fixed, and I won’t summarize other threads or groups.\n\nI’m not a genie… *yet*. Stay tuned.
 "
         "I ONLY summarize convos in the topic I'm tagged in.
 
@@ -98,7 +98,7 @@ async def start_or_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 "
         "🚫 Answer random AI prompts (yet 😉)
 "
-    )
+    """)
 
 async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = (update.effective_chat.id, update.message.message_thread_id or 0)
