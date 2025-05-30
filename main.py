@@ -450,8 +450,9 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg.text:
         return
     
-    # Skip if this is a command - commands are handled separately
+    # Skip if this is a command - let command handlers deal with it
     if msg.text.startswith('/'):
+        logger.info(f"Skipping command: {msg.text}")
         return
     
     text = msg.text.strip()
@@ -983,7 +984,8 @@ def main():
     app.add_handler(CommandHandler("resetmood", resetmood))
     
     # Combined message handler - stores messages AND handles AI replies
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), process_message))
+    # IMPORTANT: Only ONE handler for text messages to prevent duplicates
+    app.add_handler(MessageHandler(filters.TEXT, process_message))
     
     logger.info("Starting bot...")
     app.run_polling()
