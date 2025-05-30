@@ -1,1 +1,0 @@
-worker: bash entrypoint.sh
