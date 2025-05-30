@@ -286,21 +286,15 @@ async def tldr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Debug logging
     logger.info(f"TLDR request - Chat ID: {chat_id}, Thread ID: {thread_id}, Duration: {duration}min")
-    logger.info(f"Total chat history keys: {len(chat_history)}")
-    logger.info(f"Chat history keys: {list(chat_history.keys())}")
     
+    # Try to get messages
     msgs = get_recent_messages(chat_id, thread_id, duration)
     
-    logger.info(f"Found {len(msgs)} messages in the last {duration} minutes")
+    logger.info(f"Found {len(msgs)} messages for TLDR")
     if msgs:
-        logger.info(f"Sample messages: {msgs[:3]}")  # Show first 3 messages
+        logger.info(f"Sample messages: {[f'{m[\"user\"]}: {m[\"text\"][:50]}...' for m in msgs[:3]]}")
     
     if not msgs:
-        # Let's also check if there are ANY messages for this chat/thread combo
-        key = (chat_id, thread_id or 0)
-        all_msgs = chat_history.get(key, [])
-        logger.info(f"Total messages ever stored for this chat/thread: {len(all_msgs)}")
-        
         # Check if this is because she was recently updated
         startup_time = get_startup_time()
         time_since_startup = datetime.now(timezone.utc) - startup_time
@@ -308,32 +302,41 @@ async def tldr(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if time_since_startup.total_seconds() < 3600:  # Less than 1 hour since startup
             hours_ago = round(time_since_startup.total_seconds() / 3600, 1)
             await update.message.reply_text(
-                f"Nothing juicy to summarize 💅🏾\n\n"
+                f"Nothing juicy to summarize bestie 💅🏾\n\n"
                 f"BTW, I was updated/restarted {hours_ago} hours ago, so I can't see messages from before then. "
-                f"I only remember what happens after I wake up! Keep chatting and try again later 😘"
+                f"Keep chatting and try again later! 😘"
             )
         else:
-            await update.message.reply_text("Nothing juicy to summarize 💅🏾")
+            await update.message.reply_text("Nothing juicy to summarize bestie 💅🏾")
+        return
+
+    # Check if we should use daily limit for TLDR too
+    if is_daily_limit_reached():
+        await update.message.reply_text("I'm too tired for summaries today babe, try again tomorrow 😴")
         return
 
     convo = "\n".join([f"{m['user']}: {m['text']}" for m in msgs])
     mood = init_personality()
     
-    logger.info(f"Sending {len(convo)} characters to OpenAI for summarization")
+    logger.info(f"Sending TLDR request to OpenAI, conversation length: {len(convo)} chars")
     
     try:
         completion = client.chat.completions.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": f"You summarize Telegram group chats. Use plain text in order. No emojis or formatting. Today, your mood is: {mood}."},
-                {"role": "user", "content": f"Summarize this:\n{convo}"}
+                {"role": "system", "content": f"You summarize Telegram group chats like a sassy friend. Keep it natural and conversational, not formal. You're {mood} today. No bullet points - just tell the story of what happened."},
+                {"role": "user", "content": f"Summarize this chat:\n{convo}"}
             ]
         )
         reply = completion.choices[0].message.content.strip()
-        logger.info(f"OpenAI response received, length: {len(reply)}")
+        
+        # Count TLDR toward daily usage
+        usage_count = increment_daily_usage()
+        logger.info(f"TLDR completed. Daily usage: {usage_count}/{DAILY_LIMIT}")
+        
     except Exception as e:
-        logger.error(f"OpenAI API error: {e}")
-        reply = "Babe I tried, but the summary glitched 😵‍💫"
+        logger.error(f"OpenAI API error in TLDR: {e}")
+        reply = "Babe I tried to summarize but my brain glitched 😵‍💫"
     
     await update.message.reply_text(reply)
 
