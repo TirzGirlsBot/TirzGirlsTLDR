@@ -750,146 +750,51 @@ async def usage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def recon_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Interactive reconstitution calculator with buttons"""
+    """Simple reconstitution calculator"""
+    if not context.args:
+        await update.message.reply_text(
+            "💉 **Recon Calculator**\n\n"
+            "Usage: `/recon [vial_mg] [bac_ml]`\n"
+            "Example: `/recon 10 2`\n\n"
+            "Calculates mg per unit when you reconstitute\n"
+            "10mg vial with 2ml BAC water"
+        )
+        return
     
-    # Create inline keyboard with common vial sizes
-    keyboard = [
-        [
-            InlineKeyboardButton("5mg", callback_data="recon_vial_5"),
-            InlineKeyboardButton("10mg", callback_data="recon_vial_10"),
-            InlineKeyboardButton("15mg", callback_data="recon_vial_15")
-        ],
-        [
-            InlineKeyboardButton("20mg", callback_data="recon_vial_20"),
-            InlineKeyboardButton("25mg", callback_data="recon_vial_25"),
-            InlineKeyboardButton("30mg", callback_data="recon_vial_30")
-        ],
-        [
-            InlineKeyboardButton("Custom", callback_data="recon_custom")
-        ]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "💉 **Reconstitution Calculator**\n\n"
-        "Select your vial size:",
-        reply_markup=reply_markup
-    )
-
-async def recon_bac_selection(vial_mg: float, query: CallbackQuery):
-    """Show BAC water amount selection"""
-    
-    keyboard = [
-        [
-            InlineKeyboardButton("1ml", callback_data=f"recon_calc_{vial_mg}_1"),
-            InlineKeyboardButton("2ml", callback_data=f"recon_calc_{vial_mg}_2"),
-            InlineKeyboardButton("3ml", callback_data=f"recon_calc_{vial_mg}_3")
-        ],
-        [
-            InlineKeyboardButton("4ml", callback_data=f"recon_calc_{vial_mg}_4"),
-            InlineKeyboardButton("5ml", callback_data=f"recon_calc_{vial_mg}_5")
-        ],
-        [
-            InlineKeyboardButton("◀️ Back", callback_data="recon_back")
-        ]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        f"💉 **Reconstitution Calculator**\n\n"
-        f"Vial: {vial_mg}mg\n"
-        f"Select BAC water amount:",
-        reply_markup=reply_markup
-    )
-
-async def show_recon_results(vial_mg: float, bac_ml: float, query: CallbackQuery):
-    """Show final calculation results"""
-    
-    mg_per_ml = vial_mg / bac_ml
-    mg_per_01ml = mg_per_ml * 0.1
-    mg_per_005ml = mg_per_ml * 0.05
-    mg_per_unit = mg_per_01ml / 10
-    
-    # Common dosing examples
-    dose_examples = []
-    for dose in [2.5, 5.0, 7.5, 10.0, 12.5, 15.0]:
-        if dose <= vial_mg:
-            units_needed = dose / mg_per_unit
-            if units_needed <= 100:  # Reasonable pen range
-                dose_examples.append(f"• {dose}mg = {units_needed:.0f} units")
-    
-    keyboard = [
-        [InlineKeyboardButton("🔄 New Calculation", callback_data="recon_restart")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    results_text = (
-        f"💉 **Results: {vial_mg}mg + {bac_ml}ml BAC**\n\n"
-        f"**Concentration:**\n"
-        f"• {mg_per_ml:.1f}mg per 1ml\n"
-        f"• {mg_per_01ml:.2f}mg per 0.1ml\n"
-        f"• {mg_per_unit:.3f}mg per insulin unit\n\n"
-        f"**Common Doses:**\n" + "\n".join(dose_examples[:6])
-    )
-    
-    await query.edit_message_text(results_text, reply_markup=reply_markup)
-
-async def handle_recon_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all reconstitution calculator button presses"""
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    
-    if data.startswith("recon_vial_"):
-        # Vial size selected
-        vial_mg = float(data.split("_")[-1])
-        await recon_bac_selection(vial_mg, query)
+    try:
+        vial_mg = float(context.args[0])
+        bac_ml = float(context.args[1]) if len(context.args) > 1 else 2.0
         
-    elif data.startswith("recon_calc_"):
-        # Final calculation
-        parts = data.split("_")
-        vial_mg = float(parts[2])
-        bac_ml = float(parts[3])
-        await show_recon_results(vial_mg, bac_ml, query)
+        # Calculate concentration
+        mg_per_ml = vial_mg / bac_ml
+        mg_per_01ml = mg_per_ml * 0.1
+        mg_per_unit = mg_per_01ml / 10
         
-    elif data == "recon_back":
-        # Go back to vial selection
-        keyboard = [
-            [
-                InlineKeyboardButton("5mg", callback_data="recon_vial_5"),
-                InlineKeyboardButton("10mg", callback_data="recon_vial_10"),
-                InlineKeyboardButton("15mg", callback_data="recon_vial_15")
-            ],
-            [
-                InlineKeyboardButton("20mg", callback_data="recon_vial_20"),
-                InlineKeyboardButton("25mg", callback_data="recon_vial_25"),
-                InlineKeyboardButton("30mg", callback_data="recon_vial_30")
-            ],
-            [
-                InlineKeyboardButton("Custom", callback_data="recon_custom")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            "💉 **Reconstitution Calculator**\n\n"
-            "Select your vial size:",
-            reply_markup=reply_markup
+        # Common dose examples
+        dose_examples = []
+        for dose in [2.5, 5.0, 7.5, 10.0, 12.5, 15.0]:
+            if dose <= vial_mg:
+                units_needed = dose / mg_per_unit
+                if units_needed <= 100:
+                    dose_examples.append(f"• {dose}mg = {units_needed:.0f} units")
+        
+        result_text = (
+            f"💉 **Results: {vial_mg}mg + {bac_ml}ml BAC**\n\n"
+            f"**Concentration:**\n"
+            f"• {mg_per_ml:.1f}mg per 1ml\n"
+            f"• {mg_per_01ml:.2f}mg per 0.1ml\n"
+            f"• {mg_per_unit:.3f}mg per insulin unit\n\n"
+            f"**Common Doses:**\n" + "\n".join(dose_examples[:6])
         )
         
-    elif data == "recon_restart":
-        # Start over
-        await handle_recon_callback(update, context)  # This will trigger the back case
+        await update.message.reply_text(result_text)
         
-    elif data == "recon_custom":
-        await query.edit_message_text(
-            "💉 **Custom Calculation**\n\n"
-            "For custom amounts, use:\n"
-            "`/recon [vial_mg] [bac_ml]`\n\n"
-            "Example: `/recon 12.5 2.5`"
-        )
+    except ValueError:
+        await update.message.reply_text("Invalid numbers! Use: `/recon 10 2`")
+    except ZeroDivisionError:
+        await update.message.reply_text("BAC water amount can't be zero!")
+    except Exception as e:
+        await update.message.reply_text("Something went wrong with the calculation!")
 
 async def storage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Storage reminders"""
