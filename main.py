@@ -422,6 +422,10 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg or not msg.text:
         return
     
+    # Skip if this is a command - commands are handled separately
+    if msg.text.startswith('/'):
+        return
+    
     text = msg.text.strip()
     bot_username = context.bot.username
     
@@ -449,6 +453,8 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not is_mentioned and not is_reply_to_bot:
         return
+
+    logger.info(f"Processing AI reply for user {msg.from_user.first_name}")
 
     # Check daily limit BEFORE processing
     if is_daily_limit_reached():
