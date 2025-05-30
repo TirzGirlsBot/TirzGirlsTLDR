@@ -219,6 +219,17 @@ def increment_daily_usage():
     conn.close()
     return current + 1
 
+def get_startup_time():
+    """Get when the bot was last started"""
+    conn = sqlite3.connect(MEMORY_DB)
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = 'last_startup'")
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return datetime.fromisoformat(row[0])
+    return datetime.now(timezone.utc)
+
 def is_daily_limit_reached():
     """Check if daily AI usage limit is reached"""
     return get_daily_usage() >= DAILY_LIMIT
@@ -331,78 +342,48 @@ async def tldr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     
-    # Debug logging
-    logger.info(f"TLDR request - Chat ID: {chat_id}, Thread ID: {thread_id}, Duration: {duration}min")
-    logger.info(f"Current in-memory chat_history keys: {list(chat_history.keys())}")
+    # SIMPLE: Just use in-memory chat history for now
+    key = (chat_id, thread_id or 0)
+    now = datetime.now(timezone.utc)
     
-    # Try to get messages
-    msgs = get_recent_messages(chat_id, thread_id, duration)
+    # Get messages from memory
+    all_msgs = chat_history.get(key, [])
+    recent_msgs = [
+        entry for entry in all_msgs
+        if (now - entry["timestamp"]).total_seconds() <= duration * 60
+    ]
     
-    logger.info(f"Total messages found for TLDR: {len(msgs)}")
-    if msgs:
-        sample_msgs = [f"{m['user']}: {m['text'][:30]}..." for m in msgs[:3]]
-        logger.info(f"Sample messages: {sample_msgs}")
-    else:
-        # Let's also check what's actually in memory for debugging
-        key = (chat_id, thread_id or 0)
-        all_msgs_in_memory = chat_history.get(key, [])
-        logger.info(f"All messages in memory for this chat: {len(all_msgs_in_memory)}")
-        
-        # Check persistent storage directly
-        try:
-            conn = sqlite3.connect(MEMORY_DB)
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM memory WHERE chat_id = ?", (str(chat_id),))
-            total_in_db = cursor.fetchone()[0]
-            logger.info(f"Total messages in database for this chat: {total_in_db}")
-            
-            # Get some recent ones regardless of time
-            cursor.execute("SELECT user_name, message, timestamp FROM memory WHERE chat_id = ? ORDER BY timestamp DESC LIMIT 5", (str(chat_id),))
-            recent_any = cursor.fetchall()
-            logger.info(f"5 most recent messages in DB: {recent_any}")
-            conn.close()
-        except Exception as e:
-            logger.error(f"Database check error: {e}")
+    # Debug info
+    topic_name = "General" if not thread_id else f"Topic-{thread_id}"
+    logger.info(f"TLDR in {topic_name}: {len(all_msgs)} total msgs, {len(recent_msgs)} recent msgs")
     
-    if not msgs:
-        # Check if this is because she was recently updated
-        startup_time = get_startup_time()
-        time_since_startup = datetime.now(timezone.utc) - startup_time
-        
-        if time_since_startup.total_seconds() < 3600:  # Less than 1 hour since startup
-            hours_ago = round(time_since_startup.total_seconds() / 3600, 1)
-            await update.message.reply_text(
-                f"Nothing juicy to summarize bestie 💅🏾\n\n"
-                f"BTW, I was updated/restarted {hours_ago} hours ago, so I can't see messages from before then. "
-                f"Keep chatting and try again later! 😘"
-            )
-        else:
-            await update.message.reply_text("Nothing juicy to summarize bestie 💅🏾")
+    if not recent_msgs:
+        await update.message.reply_text(f"Nothing to summarize in {topic_name} bestie 💅🏾")
         return
 
-    # Check if we should use daily limit for TLDR too
+    # Check daily limit
     if is_daily_limit_reached():
         await update.message.reply_text("I'm too tired for summaries today babe, try again tomorrow 😴")
         return
 
-    convo = "\n".join([f"{m['user']}: {m['text']}" for m in msgs])
+    # Build conversation
+    convo = "\n".join([f"{m['user']}: {m['text']}" for m in recent_msgs])
     mood = init_personality()
     
-    logger.info(f"Sending TLDR request to OpenAI, conversation length: {len(convo)} chars")
+    logger.info(f"Sending TLDR to OpenAI: {len(convo)} chars from {len(recent_msgs)} messages")
     
     try:
         completion = client.chat.completions.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": f"You summarize Telegram group chats like a sassy friend. Keep it natural and conversational, not formal. You're {mood} today. No bullet points - just tell the story of what happened."},
-                {"role": "user", "content": f"Summarize this chat:\n{convo}"}
+                {"role": "system", "content": f"You summarize Telegram group chats like a sassy friend. Keep it natural and conversational, not formal. You're {mood} today. No bullet points - just tell the story of what happened in this topic."},
+                {"role": "user", "content": f"Summarize this chat from {topic_name}:\n{convo}"}
             ]
         )
         reply = completion.choices[0].message.content.strip()
         
-        # Count TLDR toward daily usage
-        usage_count = increment_daily_usage()
-        logger.info(f"TLDR completed. Daily usage: {usage_count}/{DAILY_LIMIT}")
+        # Count toward daily usage
+        increment_daily_usage()
         
     except Exception as e:
         logger.error(f"OpenAI API error in TLDR: {e}")
@@ -706,9 +687,9 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("resetmood", resetmood))
     
-    # AI reply handler should come before general message logging
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), ai_reply))
+    # Message handlers - IMPORTANT: log_message must come FIRST
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), log_message))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), ai_reply))
     
     logger.info("Starting bot...")
     app.run_polling()
