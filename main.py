@@ -355,10 +355,29 @@ async def tldr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Debug info
     topic_name = "General" if not thread_id else f"Topic-{thread_id}"
+    if thread_id:
+        # If it's a specific topic, use the actual topic name if we can detect it
+        # For now just say "this topic" to be more generic
+        topic_name = "this topic"
+    else:
+        topic_name = "General"
+        
     logger.info(f"TLDR in {topic_name}: {len(all_msgs)} total msgs, {len(recent_msgs)} recent msgs")
     
     if not recent_msgs:
-        await update.message.reply_text(f"Nothing to summarize in {topic_name} bestie 💅🏾")
+        # Check if this is because she was recently updated
+        startup_time = get_startup_time()
+        time_since_startup = datetime.now(timezone.utc) - startup_time
+        
+        if time_since_startup.total_seconds() < 3600:  # Less than 1 hour since startup
+            hours_ago = round(time_since_startup.total_seconds() / 3600, 1)
+            await update.message.reply_text(
+                f"Nothing to summarize in {topic_name} bestie 💅🏾\n\n"
+                f"BTW, I was updated/restarted {hours_ago} hours ago, so I can't see messages from before then. "
+                f"Keep chatting and try again later! 😘"
+            )
+        else:
+            await update.message.reply_text(f"Nothing to summarize in {topic_name} bestie 💅🏾")
         return
 
     # Check daily limit
@@ -391,7 +410,174 @@ async def tldr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(reply)
 
-async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Combined handler: store message AND check for AI replies"""
+    
+    # ALWAYS store the message first
+    store_message(update)
+    
+    # THEN check if we should reply
+    msg = update.message
+    if not msg or not msg.text:
+        return
+    
+    text = msg.text.strip()
+    bot_username = context.bot.username
+    
+    # Check multiple ways the bot could be mentioned
+    is_mentioned = False
+    
+    # Check for @username mention
+    if bot_username and f"@{bot_username.lower()}" in text.lower():
+        is_mentioned = True
+        logger.info("Found @username mention")
+    
+    # Check for mention entities (more reliable)
+    if msg.entities:
+        for entity in msg.entities:
+            if entity.type == "mention":
+                mentioned_username = text[entity.offset:entity.offset + entity.length]
+                if bot_username and mentioned_username.lower() == f"@{bot_username.lower()}":
+                    is_mentioned = True
+                    logger.info(f"Found entity mention: {mentioned_username}")
+    
+    # Check if it's a reply to the bot
+    is_reply_to_bot = (msg.reply_to_message and 
+                       msg.reply_to_message.from_user and 
+                       msg.reply_to_message.from_user.is_bot)
+    
+    if not is_mentioned and not is_reply_to_bot:
+        return
+
+    # Check daily limit BEFORE processing
+    if is_daily_limit_reached():
+        tired_responses = [
+            "I'm exhausted today bestie, try again tomorrow 😴",
+            "Hit my daily energy limit, catch me tomorrow 💤",
+            "Brain is fried for today, reset at midnight ✨",
+            "Used up all my smart responses for today 🫠",
+            "I need to recharge, back tomorrow babe 💕"
+        ]
+        await msg.reply_text(random.choice(tired_responses))
+        return
+
+    user_name = msg.from_user.first_name or "someone"
+    user_id = msg.from_user.id
+    
+    # Individual user cooldown (separate from daily limit)
+    if is_on_cooldown(user_id):
+        await msg.reply_text("Slow down, boo 😘")
+        return
+    
+    # Get user context and chat history
+    user_context = get_user_context(user_id)
+    chat_context = get_recent_chat_context(msg.chat_id, limit=8)
+    
+    # Clean the prompt - remove @mentions
+    prompt = text
+    if bot_username:
+        prompt = prompt.replace(f"@{bot_username}", "").strip()
+    
+    if not prompt:
+        # Personalized greeting based on interaction count
+        if user_context["interaction_count"] > 10:
+            greeting_options = [
+                f"👀 hey {user_context['nickname'] or user_name}, what's good?",
+                "what's the tea? ☕",
+                "I'm here bestie, spill",
+                "you rang? 💅"
+            ]
+        else:
+            greeting_options = [
+                f"👀 I'm here, {user_name} — say something cute.",
+                "what's up? 💫",
+                "you called?",
+                "I'm listening 👂"
+            ]
+        
+        # Still counts toward daily limit
+        increment_daily_usage()
+        await msg.reply_text(random.choice(greeting_options))
+        return
+
+    try:
+        mood = init_personality()
+        
+        # Build enhanced context
+        context_info = ""
+        if chat_context:
+            context_info += f"Recent chat context:\n{chat_context}\n\n"
+        
+        if user_context["interaction_count"] > 5:
+            context_info += f"You've talked to {user_name} {user_context['interaction_count']} times before. "
+            if user_context["notes"]:
+                context_info += f"Notes about them: {user_context['notes']} "
+        
+        system_prompt = f"""You are Summaria, a sassy girly group chat member who happens to know about tirz/peptides. You're {mood}. 
+
+{context_info}
+
+Key vibes:
+- You're a fun, girly friend first - peptide expert second
+- Use "lol", "bestie", "babe", "girl", casual slang naturally
+- Be witty, sassy, and conversational like texting friends
+- You know peptides but explain it like a friend, not a textbook
+- Mix helpful info with personality and humor
+- React naturally to things - laugh, be dramatic, etc.
+- Don't always be "professional" - be yourself!
+- You can be sassy, flirty, tired, extra - whatever your mood is
+- Help with tirz stuff but keep it fun and relatable
+
+You're the friend who knows her shit about peptides but is still fun to talk to, not a medical bot."""
+        
+        completion = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        reply = completion.choices[0].message.content.strip()
+        
+        # Increment usage AFTER successful API call
+        usage_count = increment_daily_usage()
+        logger.info(f"Daily usage: {usage_count}/{DAILY_LIMIT}")
+        
+        # Update user personality notes based on this interaction if it reveals something
+        if len(prompt) > 50:  # Only for substantial messages
+            try:
+                # Quick analysis to update user notes
+                analysis_prompt = f"Based on this message: '{prompt}' - what's one brief personality trait or interest of this person? Answer in 5 words or less, or 'nothing notable' if it's just casual chat."
+                
+                analysis = client.chat.completions.create(
+                    model="gpt-4",
+                    messages=[
+                        {"role": "system", "content": "You analyze messages to identify personality traits or interests. Be very brief."},
+                        {"role": "user", "content": analysis_prompt}
+                    ],
+                    max_tokens=20
+                )
+                
+                trait = analysis.choices[0].message.content.strip()
+                if trait and trait.lower() != "nothing notable":
+                    # Update user notes
+                    current_notes = user_context["notes"]
+                    if trait not in current_notes:
+                        new_notes = f"{current_notes}, {trait}".strip(", ")
+                        conn = sqlite3.connect(MEMORY_DB)
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE user_preferences SET personality_notes = ? WHERE user_id = ?", 
+                                     (new_notes, str(user_id)))
+                        conn.commit()
+                        conn.close()
+            except:
+                pass  # Don't let analysis errors break the main response
+        
+    except Exception as e:
+        logger.error(f"OpenAI API error: {e}")
+        reply = "I tried baby but my brain glitched 🫠"
+
+    await msg.reply_text(reply)
     """Handle AI replies when bot is mentioned"""
     msg = update.message
     if not msg or not msg.text:
@@ -687,9 +873,8 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("resetmood", resetmood))
     
-    # Message handlers - IMPORTANT: log_message must come FIRST
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), log_message))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), ai_reply))
+    # Combined message handler - stores messages AND handles AI replies
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), process_message))
     
     logger.info("Starting bot...")
     app.run_polling()
