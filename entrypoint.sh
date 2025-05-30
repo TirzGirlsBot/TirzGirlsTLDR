@@ -1,2 +1,2 @@
 #!/bin/bash
-python3 main_webhook.py
+python3 main.py
