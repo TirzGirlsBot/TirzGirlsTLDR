@@ -292,7 +292,8 @@ async def tldr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"Found {len(msgs)} messages for TLDR")
     if msgs:
-        logger.info(f"Sample messages: {[f'{m[\"user\"]}: {m[\"text\"][:50]}...' for m in msgs[:3]]}")
+        sample_msgs = [f"{m['user']}: {m['text'][:50]}..." for m in msgs[:3]]
+        logger.info(f"Sample messages: {sample_msgs}")
     
     if not msgs:
         # Check if this is because she was recently updated
