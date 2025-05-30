@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 chat_history = defaultdict(list)
 cooldowns = {}
 MEMORY_DB = "memory.sqlite"
-DAILY_LIMIT = 70  # Daily AI response limit
+DAILY_LIMIT = 2000  # Daily AI response limit - very generous since API costs are low
 
 PERSONALITIES = [
     "flirty and chaotic", "tired but observant", "glamorous and extra", 
@@ -377,7 +377,7 @@ async def tldr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         completion = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": f"You summarize Telegram group chats like a sassy friend. Keep it natural and conversational, not formal. You're {mood} today. No bullet points - just tell the story of what happened in this topic."},
                 {"role": "user", "content": f"Summarize this chat from {topic_name}:\n{convo}"}
@@ -493,7 +493,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Just respond naturally to what people say like a regular friend texting. Don't bring up peptides or tirz unless they specifically ask about it. Keep it casual and normal."""
         
         completion = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
