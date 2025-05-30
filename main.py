@@ -465,11 +465,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = msg.from_user.first_name or "someone"
     user_id = msg.from_user.id
     
-    # Individual user cooldown (separate from daily limit)
-    if is_on_cooldown(user_id):
-        await msg.reply_text("Slow down, boo 😘")
-        return
-    
     # Get user context
     user_context = get_user_context(user_id)
     
@@ -710,11 +705,6 @@ async def handle_image_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     
     user_id = msg.from_user.id
-    
-    # Add cooldown for expensive image analysis
-    if is_on_cooldown(user_id):
-        await msg.reply_text("Hold up, give me a sec before the next image analysis 👀")
-        return
     
     # Check daily limit
     if is_daily_limit_reached():
