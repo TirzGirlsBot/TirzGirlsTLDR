@@ -506,6 +506,9 @@ async def resetmood(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_mood = reset_personality()
     await update.message.reply_text(f"🌀 Reset complete. New personality: {new_mood}")
 
+async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    store_message(update)
+
 async def handle_image_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle messages with images - ONLY when specifically mentioned"""
     msg = update.message
