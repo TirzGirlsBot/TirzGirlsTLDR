@@ -15,7 +15,7 @@ from openai import OpenAI
 from collections import defaultdict
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,17 +30,36 @@ PERSONALITIES = [
     "a hot girl in her era", "quietly judging", "high-maintenance but right"
 ]
 
-def init_personality():
+def init_db():
+    """Initialize the database with required tables"""
     conn = sqlite3.connect(MEMORY_DB)
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS nicknames (user_id TEXT PRIMARY KEY, name TEXT)")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS memory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT,
+        user_id TEXT,
+        user_name TEXT,
+        message TEXT,
+        timestamp TEXT
+    )""")
+    conn.commit()
+    conn.close()
+
+def init_personality():
+    init_db()
+    conn = sqlite3.connect(MEMORY_DB)
+    cursor = conn.cursor()
     cursor.execute("SELECT value FROM settings WHERE key = 'personality'")
     row = cursor.fetchone()
     if not row:
         mood = random.choice(PERSONALITIES)
         cursor.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ('personality', mood))
         conn.commit()
+        conn.close()
         return mood
+    conn.close()
     return row[0]
 
 def reset_personality():
@@ -49,14 +68,15 @@ def reset_personality():
     mood = random.choice(PERSONALITIES)
     cursor.execute("REPLACE INTO settings (key, value) VALUES (?, ?)", ('personality', mood))
     conn.commit()
+    conn.close()
     return mood
 
 def get_nickname(user_id):
     conn = sqlite3.connect(MEMORY_DB)
     cursor = conn.cursor()
-    cursor.execute("CREATE TABLE IF NOT EXISTS nicknames (user_id TEXT PRIMARY KEY, name TEXT)")
     cursor.execute("SELECT name FROM nicknames WHERE user_id = ?", (str(user_id),))
     row = cursor.fetchone()
+    conn.close()
     return row[0] if row else None
 
 def set_nickname(user_id, name):
@@ -64,6 +84,7 @@ def set_nickname(user_id, name):
     cursor = conn.cursor()
     cursor.execute("REPLACE INTO nicknames (user_id, name) VALUES (?, ?)", (str(user_id), name))
     conn.commit()
+    conn.close()
 
 def is_on_cooldown(user_id):
     now = datetime.now(timezone.utc)
@@ -129,14 +150,68 @@ async def tldr(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         reply = completion.choices[0].message.content.strip()
     except Exception as e:
+        logger.error(f"OpenAI API error: {e}")
         reply = "Babe I tried, but the summary glitched 😵‍💫"
+    
     await update.message.reply_text(reply)
-    await update.message.reply_text(reply)
+
+async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle AI replies when bot is mentioned"""
+    msg = update.message
+    if not msg or not msg.text:
+        return
+    
+    text = msg.text.strip()
+    bot_username = context.bot.username.lower() if context.bot.username else "summaria"
+    
+    # Check if bot is mentioned or if it's a reply to the bot
+    is_mentioned = f"@{bot_username}" in text.lower()
+    is_reply_to_bot = (msg.reply_to_message and 
+                       msg.reply_to_message.from_user and 
+                       msg.reply_to_message.from_user.is_bot)
+    
+    if not is_mentioned and not is_reply_to_bot:
+        return
+
+    user_name = msg.from_user.first_name or "someone"
+    prompt = text.replace(f"@{bot_username}", "").strip()
+    
+    if not prompt:
+        await msg.reply_text(f"👀 I'm here, {user_name} — say something cute.")
+        return
+
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are Summaria, a smart, shady group chat girlbot. Witty, fun, and helpful."},
+                {"role": "user", "content": f"The user is {user_name}. {prompt}"}
+            ]
+        )
+        reply = completion.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"OpenAI API error: {e}")
+        reply = "I tried baby but my brain glitched 🫠"
+
+    await msg.reply_text(reply)
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = """🔮 **Summaria Commands**
+
+/tldr - Summarize last 3 hours
+/tldr 1h, /tldr 6h, /tldr all - Custom time ranges
+/help - Show this help
+
+Mention me (@{}) or reply to my messages for AI chat! 💅🏾""".format(context.bot.username or "summaria")
+    
+    await update.message.reply_text(help_text)
 
 async def resetmood(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if str(user_id) != os.getenv("OWNER_ID"):
+    owner_id = os.getenv("OWNER_ID")
+    if not owner_id or str(user_id) != owner_id:
         return
+    
     new_mood = reset_personality()
     await update.message.reply_text(f"🌀 Reset complete. New personality: {new_mood}")
 
@@ -144,12 +219,29 @@ async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     store_message(update)
 
 def main():
+    # Initialize database on startup
+    init_db()
+    
+    if not TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN not found in environment variables")
+        return
+    
+    if not os.getenv("OPENAI_API_KEY"):
+        logger.error("OPENAI_API_KEY not found in environment variables")
+        return
+    
     app = ApplicationBuilder().token(TOKEN).build()
+    
+    # Add handlers
     app.add_handler(CommandHandler("tldr", tldr))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("resetmood", resetmood))
+    
+    # Message handlers - order matters!
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), log_message))
     app.add_handler(MessageHandler(filters.TEXT, ai_reply))
+    
+    logger.info("Starting bot...")
     app.run_polling()
 
 if __name__ == "__main__":
