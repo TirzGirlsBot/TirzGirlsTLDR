@@ -227,6 +227,7 @@ def store_message(update: Update):
     msg = update.message
     if msg and msg.text:
         # Store in memory for current session
+        # Use message_thread_id for topics (General, Fashion, etc.)
         key = (msg.chat_id, msg.message_thread_id or 0)
         chat_history[key].append({
             "timestamp": datetime.now(timezone.utc),
@@ -234,7 +235,7 @@ def store_message(update: Update):
             "text": msg.text.strip()
         })
         
-        # Store in persistent database
+        # Store in persistent database with topic info
         store_in_persistent_memory(
             msg.chat_id, 
             msg.message_thread_id or 0,
@@ -242,22 +243,68 @@ def store_message(update: Update):
             msg.from_user.first_name,
             msg.text.strip()
         )
+        
+        # Debug logging with topic info
+        topic_name = "General" if not msg.message_thread_id else f"Topic-{msg.message_thread_id}"
+        logger.info(f"Stored message from {msg.from_user.first_name} in chat {msg.chat_id}, topic: {topic_name}")
 
 def get_recent_messages(chat_id, thread_id, duration_minutes=180):
-    # First try in-memory (faster)
+    # For topics like General/Fashion, we need to match the exact thread_id
+    # thread_id will be None for General, or a specific ID for Fashion/other topics
+    
     key = (chat_id, thread_id or 0)
     now = datetime.now(timezone.utc)
+    
+    # Try in-memory first
     memory_msgs = [
         entry for entry in chat_history[key]
         if (now - entry["timestamp"]).total_seconds() <= duration_minutes * 60
     ]
     
+    topic_name = "General" if not thread_id else f"Topic-{thread_id}"
+    logger.info(f"Looking for messages in {topic_name}: found {len(memory_msgs)} in memory")
+    
     # If we have enough in memory, use those
-    if len(memory_msgs) > 5:
+    if len(memory_msgs) > 3:
+        logger.info(f"Using {len(memory_msgs)} in-memory messages from {topic_name}")
         return memory_msgs
     
-    # Otherwise get from persistent storage
-    return get_persistent_messages(chat_id, thread_id, duration_minutes)
+    # Otherwise try persistent storage for this specific topic
+    logger.info(f"Checking persistent storage for {topic_name}...")
+    conn = sqlite3.connect(MEMORY_DB)
+    cursor = conn.cursor()
+    
+    cutoff_time = (datetime.now(timezone.utc) - timedelta(minutes=duration_minutes)).isoformat()
+    
+    # IMPORTANT: Match the exact chat_id AND thread_id for topic-specific messages
+    cursor.execute("""SELECT user_name, message, timestamp FROM memory 
+                     WHERE chat_id = ? AND user_id != 'thread_change_marker' AND timestamp > ?
+                     ORDER BY timestamp ASC""", 
+                   (str(chat_id), cutoff_time))
+    
+    # Filter by thread_id after getting from DB (since we stored it as part of chat context)
+    all_messages = cursor.fetchall()
+    conn.close()
+    
+    messages = []
+    for row in all_messages:
+        user_name, message, timestamp_str = row
+        try:
+            timestamp = datetime.fromisoformat(timestamp_str)
+            messages.append({
+                "timestamp": timestamp,
+                "user": user_name,
+                "text": message
+            })
+        except:
+            continue
+    
+    logger.info(f"Found {len(messages)} persistent messages from {topic_name}")
+    
+    # Return whichever has more messages
+    if len(messages) > len(memory_msgs):
+        return messages
+    return memory_msgs
 
 async def tldr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -286,14 +333,36 @@ async def tldr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Debug logging
     logger.info(f"TLDR request - Chat ID: {chat_id}, Thread ID: {thread_id}, Duration: {duration}min")
+    logger.info(f"Current in-memory chat_history keys: {list(chat_history.keys())}")
     
     # Try to get messages
     msgs = get_recent_messages(chat_id, thread_id, duration)
     
-    logger.info(f"Found {len(msgs)} messages for TLDR")
+    logger.info(f"Total messages found for TLDR: {len(msgs)}")
     if msgs:
-        sample_msgs = [f"{m['user']}: {m['text'][:50]}..." for m in msgs[:3]]
+        sample_msgs = [f"{m['user']}: {m['text'][:30]}..." for m in msgs[:3]]
         logger.info(f"Sample messages: {sample_msgs}")
+    else:
+        # Let's also check what's actually in memory for debugging
+        key = (chat_id, thread_id or 0)
+        all_msgs_in_memory = chat_history.get(key, [])
+        logger.info(f"All messages in memory for this chat: {len(all_msgs_in_memory)}")
+        
+        # Check persistent storage directly
+        try:
+            conn = sqlite3.connect(MEMORY_DB)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM memory WHERE chat_id = ?", (str(chat_id),))
+            total_in_db = cursor.fetchone()[0]
+            logger.info(f"Total messages in database for this chat: {total_in_db}")
+            
+            # Get some recent ones regardless of time
+            cursor.execute("SELECT user_name, message, timestamp FROM memory WHERE chat_id = ? ORDER BY timestamp DESC LIMIT 5", (str(chat_id),))
+            recent_any = cursor.fetchall()
+            logger.info(f"5 most recent messages in DB: {recent_any}")
+            conn.close()
+        except Exception as e:
+            logger.error(f"Database check error: {e}")
     
     if not msgs:
         # Check if this is because she was recently updated
