@@ -44,8 +44,23 @@ def init_db():
         message TEXT,
         timestamp TEXT
     )""")
+    
+    # Track when the bot was last started/updated
+    cursor.execute("REPLACE INTO settings (key, value) VALUES (?, ?)", 
+                   ('last_startup', datetime.now(timezone.utc).isoformat()))
     conn.commit()
     conn.close()
+
+def get_startup_time():
+    """Get when the bot was last started"""
+    conn = sqlite3.connect(MEMORY_DB)
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = 'last_startup'")
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return datetime.fromisoformat(row[0])
+    return datetime.now(timezone.utc)
 
 def init_personality():
     init_db()
@@ -133,13 +148,46 @@ async def tldr(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif arg == "all":
             duration = 999999
 
-    msgs = get_recent_messages(update.effective_chat.id, update.message.message_thread_id, duration)
+    chat_id = update.effective_chat.id
+    thread_id = update.message.message_thread_id
+    
+    # Debug logging
+    logger.info(f"TLDR request - Chat ID: {chat_id}, Thread ID: {thread_id}, Duration: {duration}min")
+    logger.info(f"Total chat history keys: {len(chat_history)}")
+    logger.info(f"Chat history keys: {list(chat_history.keys())}")
+    
+    msgs = get_recent_messages(chat_id, thread_id, duration)
+    
+    logger.info(f"Found {len(msgs)} messages in the last {duration} minutes")
+    if msgs:
+        logger.info(f"Sample messages: {msgs[:3]}")  # Show first 3 messages
+    
     if not msgs:
-        await update.message.reply_text("Nothing juicy to summarize 💅🏾")
+        # Let's also check if there are ANY messages for this chat/thread combo
+        key = (chat_id, thread_id or 0)
+        all_msgs = chat_history.get(key, [])
+        logger.info(f"Total messages ever stored for this chat/thread: {len(all_msgs)}")
+        
+        # Check if this is because she was recently updated
+        startup_time = get_startup_time()
+        time_since_startup = datetime.now(timezone.utc) - startup_time
+        
+        if time_since_startup.total_seconds() < 3600:  # Less than 1 hour since startup
+            hours_ago = round(time_since_startup.total_seconds() / 3600, 1)
+            await update.message.reply_text(
+                f"Nothing juicy to summarize 💅🏾\n\n"
+                f"BTW, I was updated/restarted {hours_ago} hours ago, so I can't see messages from before then. "
+                f"I only remember what happens after I wake up! Keep chatting and try again later 😘"
+            )
+        else:
+            await update.message.reply_text("Nothing juicy to summarize 💅🏾")
         return
 
     convo = "\n".join([f"{m['user']}: {m['text']}" for m in msgs])
     mood = init_personality()
+    
+    logger.info(f"Sending {len(convo)} characters to OpenAI for summarization")
+    
     try:
         completion = client.chat.completions.create(
             model="gpt-4",
@@ -149,6 +197,7 @@ async def tldr(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         )
         reply = completion.choices[0].message.content.strip()
+        logger.info(f"OpenAI response received, length: {len(reply)}")
     except Exception as e:
         logger.error(f"OpenAI API error: {e}")
         reply = "Babe I tried, but the summary glitched 😵‍💫"
