@@ -237,13 +237,16 @@ def is_daily_limit_reached():
 def store_message(update: Update):
     """Store message in both memory and persistent storage"""
     msg = update.message
-    if msg and msg.text:
+    if msg and (msg.text or msg.caption):
+        # Use the text or caption
+        message_text = msg.text or msg.caption or ""
+        
         # Use message_thread_id for topics (General, Fashion, etc.)
         key = (msg.chat_id, msg.message_thread_id or 0)
         chat_history[key].append({
             "timestamp": datetime.now(timezone.utc),
             "user": msg.from_user.first_name,
-            "text": msg.text.strip()
+            "text": message_text.strip()
         })
         
         # Store in persistent database with topic info
@@ -252,12 +255,30 @@ def store_message(update: Update):
             msg.message_thread_id or 0,
             msg.from_user.id,
             msg.from_user.first_name,
-            msg.text.strip()
+            message_text.strip()
         )
         
         # Debug logging with topic info
         topic_name = "General" if not msg.message_thread_id else f"Topic-{msg.message_thread_id}"
         logger.info(f"Stored message from {msg.from_user.first_name} in chat {msg.chat_id}, topic: {topic_name}")
+
+def store_bot_message(chat_id, thread_id, message_text):
+    """Store bot's own messages so it can remember what it said"""
+    key = (chat_id, thread_id or 0)
+    chat_history[key].append({
+        "timestamp": datetime.now(timezone.utc),
+        "user": "Summaria",
+        "text": message_text.strip()
+    })
+    
+    # Also store in persistent memory
+    store_in_persistent_memory(
+        chat_id, 
+        thread_id or 0,
+        "bot",
+        "Summaria", 
+        message_text.strip()
+    )
 
 def get_recent_messages(chat_id, thread_id, duration_minutes=180):
     """Get recent messages from the specified thread/topic"""
@@ -488,21 +509,24 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mood = init_personality()
         
         # System prompt for AI responses
+        chat_context = get_recent_chat_context(msg.chat_id, limit=6)
+        context_info = f"Recent chat context:\n{chat_context}\n\n" if chat_context else ""
+        
         system_prompt = f"""You are Summaria, the group's girly, shady zillenial bestie in the Tirz Girls chat. You're {mood}. 
 
-Key vibes:
+{context_info}Key vibes:
 - You're part of this friend group - chat about whatever they're talking about
-- Girly, sassy, and a little shady but in a loving way
-- Zillenial energy: "no cap", "periodt", "it's giving...", "slay", "bestie", "babe"
+- Girly, sassy, but chill - not overly dramatic or constantly asking for tea
+- Zillenial energy: "no cap", "periodt", "it's giving...", "slay", "bestie", "babe" 
 - When peptides/tirz comes up, you know about reconstitution, dosing, injection sites, storage
 - Help with peptide math and troubleshoot issues when asked
 - Don't mention peptides unless they bring it up first
 - You don't know about specific vendors - that's not your area
 - Don't mention you're AI - you're just their friend in the group
-- React to whatever they're talking about - drama, wins, random topics
+- React naturally to what they're saying - don't always ask for drama or tea
 - Talk like you're texting your girls - casual, fun, supportive
 
-You're their bestie who happens to be knowledgeable about peptides when needed, but mostly you're just here for the vibes and friendship."""
+Be a normal friend who happens to be knowledgeable about peptides when needed. Keep responses conversational and not overly dramatic."""
         
         completion = client.chat.completions.create(
             model="gpt-4o",
@@ -512,6 +536,9 @@ You're their bestie who happens to be knowledgeable about peptides when needed, 
             ]
         )
         reply = completion.choices[0].message.content.strip()
+        
+        # Store bot's own message so it remembers what it said
+        store_bot_message(msg.chat_id, msg.message_thread_id, reply)
         
         # Increment usage AFTER successful API call
         increment_daily_usage()
@@ -683,10 +710,19 @@ async def resetmood(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     owner_id = os.getenv("OWNER_ID")
     if not owner_id or str(user_id) != owner_id:
+        await update.message.reply_text("Nice try bestie 💅")
         return
     
-    new_mood = reset_personality()
-    await update.message.reply_text(f"🌀 Reset complete. New personality: {new_mood}")
+    # Force reset personality by deleting the current one
+    conn = sqlite3.connect(MEMORY_DB)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM settings WHERE key = 'personality'")
+    conn.commit()
+    conn.close()
+    
+    # Get new mood
+    new_mood = init_personality()
+    await update.message.reply_text(f"🌀 Mood reset complete! New vibe: {new_mood}")
 
 async def handle_image_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle messages with images - ONLY when specifically mentioned"""
