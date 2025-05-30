@@ -36,17 +36,30 @@ def init_db():
     """Initialize the database with required tables"""
     conn = sqlite3.connect(MEMORY_DB)
     cursor = conn.cursor()
+    
+    # Create basic tables
     cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
     cursor.execute("CREATE TABLE IF NOT EXISTS nicknames (user_id TEXT PRIMARY KEY, name TEXT)")
+    
+    # Create memory table with original schema first
     cursor.execute("""CREATE TABLE IF NOT EXISTS memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_id TEXT,
-        thread_id TEXT,
         user_id TEXT,
         user_name TEXT,
         message TEXT,
         timestamp TEXT
     )""")
+    
+    # Check if thread_id column exists, if not add it
+    cursor.execute("PRAGMA table_info(memory)")
+    columns = [column[1] for column in cursor.fetchall()]
+    if 'thread_id' not in columns:
+        logger.info("Adding thread_id column to memory table")
+        cursor.execute("ALTER TABLE memory ADD COLUMN thread_id TEXT DEFAULT '0'")
+        # Update existing records to have thread_id = '0' (General topic)
+        cursor.execute("UPDATE memory SET thread_id = '0' WHERE thread_id IS NULL")
+    
     cursor.execute("""CREATE TABLE IF NOT EXISTS user_preferences (
         user_id TEXT PRIMARY KEY,
         nickname TEXT,
