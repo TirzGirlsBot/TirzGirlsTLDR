@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 chat_history = defaultdict(list)
 cooldowns = {}
 MEMORY_DB = "memory.sqlite"
+DAILY_LIMIT = 70  # Daily AI response limit
 
 PERSONALITIES = [
     "flirty and chaotic", "tired but observant", "glamorous and extra", 
@@ -196,16 +197,31 @@ def is_on_cooldown(user_id):
     cooldowns[user_id] = now
     return False
 
-def get_startup_time():
-    """Get when the bot was last started"""
+def get_daily_usage():
+    """Get today's AI usage count"""
     conn = sqlite3.connect(MEMORY_DB)
     cursor = conn.cursor()
-    cursor.execute("SELECT value FROM settings WHERE key = 'last_startup'")
+    today = datetime.now(timezone.utc).date().isoformat()
+    cursor.execute("SELECT value FROM settings WHERE key = ?", (f"daily_usage_{today}",))
     row = cursor.fetchone()
     conn.close()
-    if row:
-        return datetime.fromisoformat(row[0])
-    return datetime.now(timezone.utc)
+    return int(row[0]) if row else 0
+
+def increment_daily_usage():
+    """Increment today's usage count"""
+    conn = sqlite3.connect(MEMORY_DB)
+    cursor = conn.cursor()
+    today = datetime.now(timezone.utc).date().isoformat()
+    current = get_daily_usage()
+    cursor.execute("REPLACE INTO settings (key, value) VALUES (?, ?)", 
+                   (f"daily_usage_{today}", str(current + 1)))
+    conn.commit()
+    conn.close()
+    return current + 1
+
+def is_daily_limit_reached():
+    """Check if daily AI usage limit is reached"""
+    return get_daily_usage() >= DAILY_LIMIT
 
 def store_message(update: Update):
     msg = update.message
@@ -490,8 +506,110 @@ async def resetmood(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_mood = reset_personality()
     await update.message.reply_text(f"🌀 Reset complete. New personality: {new_mood}")
 
-async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    store_message(update)
+async def handle_image_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle messages with images - ONLY when specifically mentioned"""
+    msg = update.message
+    if not msg:
+        return
+        
+    # STRICT: Only analyze if explicitly mentioned or direct reply to bot
+    text = (msg.caption or "").strip()
+    bot_username = context.bot.username
+    
+    is_mentioned = False
+    if bot_username and f"@{bot_username.lower()}" in text.lower():
+        is_mentioned = True
+    
+    is_reply_to_bot = (msg.reply_to_message and 
+                       msg.reply_to_message.from_user and 
+                       msg.reply_to_message.from_user.is_bot)
+    
+    # CRITICAL: Exit early if not specifically called
+    if not is_mentioned and not is_reply_to_bot:
+        return
+    
+    user_id = msg.from_user.id
+    
+    # Add cooldown for expensive image analysis
+    if is_on_cooldown(user_id):
+        await msg.reply_text("Hold up, give me a sec before the next image analysis 👀")
+        return
+    
+    user_name = msg.from_user.first_name or "someone"
+    
+    try:
+        # Get the largest photo
+        if msg.photo:
+            photo = msg.photo[-1]
+            file = await context.bot.get_file(photo.file_id)
+        elif msg.document and msg.document.mime_type and msg.document.mime_type.startswith('image'):
+            file = await context.bot.get_file(msg.document.file_id)
+        else:
+            await msg.reply_text("I can see there's media but I can't analyze that type 👀")
+            return
+        
+        # Get file URL for GPT-4 Vision
+        file_url = file.file_path
+        
+        mood = init_personality()
+        user_context = get_user_context(msg.from_user.id)
+        
+        # Clean the prompt
+        prompt = text
+        if bot_username:
+            prompt = prompt.replace(f"@{bot_username}", "").strip()
+        
+        if not prompt:
+            prompt = "What do you think about this image?"
+        
+        context_info = ""
+        if user_context["interaction_count"] > 5:
+            context_info = f"You've talked to {user_name} {user_context['interaction_count']} times before. "
+        
+        system_prompt = f"""You are Summaria, a knowledgeable group chat member who helps with grey market tirz/peptides. You're {mood}.
+
+{context_info}
+
+You're analyzing an image someone specifically asked you to look at. This could be:
+- Injection sites or techniques
+- Vials, needles, or supplies
+- Before/after progress pics
+- Lab results or charts
+- Memes or random photos
+- Screenshots of protocols or info
+
+Key vibes:
+- Be helpful and knowledgeable about peptide-related images
+- For injection sites: give useful feedback on technique, rotation, etc.
+- For supplies: comment on needle sizes, storage, etc.
+- For progress pics: be supportive and encouraging
+- For memes/random stuff: just react naturally like a friend
+- Keep it casual but informative when relevant
+- Don't be overly medical - you're a knowledgeable friend, not a doctor
+
+Analyze what you see and respond helpfully in your casual style."""
+
+        completion = client.chat.completions.create(
+            model="gpt-4o",  # GPT-4 Vision model
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user", 
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": file_url}}
+                    ]
+                }
+            ]
+        )
+        
+        reply = completion.choices[0].message.content.strip()
+        
+    except Exception as e:
+        logger.error(f"Image analysis error: {e}")
+        reply = "I tried to look at that but my eyes glitched 👁️💫"
+    
+    await msg.reply_text(reply)
 
 def main():
     # Initialize database on startup
