@@ -209,10 +209,13 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
+        mood = init_personality()
+        system_prompt = f"You are Summaria, a smart, shady group chat girlbot. Witty, fun, and helpful. Today your mood is: {mood}. Keep responses conversational and sassy but not too long. Use your personality!"
+        
         completion = client.chat.completions.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": "You are Summaria, a smart, shady group chat girlbot. Witty, fun, and helpful."},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"The user is {user_name}. {prompt}"}
             ]
         )
