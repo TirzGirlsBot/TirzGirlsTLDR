@@ -162,19 +162,47 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     text = msg.text.strip()
-    bot_username = context.bot.username.lower() if context.bot.username else "summaria"
+    bot_username = context.bot.username
     
-    # Check if bot is mentioned or if it's a reply to the bot
-    is_mentioned = f"@{bot_username}" in text.lower()
+    # Debug logging
+    logger.info(f"Bot username: {bot_username}")
+    logger.info(f"Message text: {text}")
+    logger.info(f"Message entities: {msg.entities}")
+    
+    # Check multiple ways the bot could be mentioned
+    is_mentioned = False
+    
+    # Check for @username mention
+    if bot_username and f"@{bot_username.lower()}" in text.lower():
+        is_mentioned = True
+        logger.info("Found @username mention")
+    
+    # Check for mention entities (more reliable)
+    if msg.entities:
+        for entity in msg.entities:
+            if entity.type == "mention":
+                mentioned_username = text[entity.offset:entity.offset + entity.length]
+                if bot_username and mentioned_username.lower() == f"@{bot_username.lower()}":
+                    is_mentioned = True
+                    logger.info(f"Found entity mention: {mentioned_username}")
+    
+    # Check if it's a reply to the bot
     is_reply_to_bot = (msg.reply_to_message and 
                        msg.reply_to_message.from_user and 
                        msg.reply_to_message.from_user.is_bot)
+    
+    if is_reply_to_bot:
+        logger.info("Message is reply to bot")
     
     if not is_mentioned and not is_reply_to_bot:
         return
 
     user_name = msg.from_user.first_name or "someone"
-    prompt = text.replace(f"@{bot_username}", "").strip()
+    
+    # Clean the prompt - remove @mentions
+    prompt = text
+    if bot_username:
+        prompt = prompt.replace(f"@{bot_username}", "").strip()
     
     if not prompt:
         await msg.reply_text(f"👀 I'm here, {user_name} — say something cute.")
@@ -232,14 +260,14 @@ def main():
     
     app = ApplicationBuilder().token(TOKEN).build()
     
-    # Add handlers
+    # Add handlers - AI reply BEFORE log_message
     app.add_handler(CommandHandler("tldr", tldr))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("resetmood", resetmood))
     
-    # Message handlers - order matters!
+    # AI reply handler should come before general message logging
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), ai_reply))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), log_message))
-    app.add_handler(MessageHandler(filters.TEXT, ai_reply))
     
     logger.info("Starting bot...")
     app.run_polling()
