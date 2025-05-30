@@ -364,68 +364,6 @@ async def tldr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         completion = client.chat.completions.create(
-            model="gpt-4o",  # GPT-4 Vision model
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user", 
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": file_url}}
-                    ]
-                }
-            ]
-        )
-        
-        reply = completion.choices[0].message.content.strip()
-        
-        # Increment usage after successful API call
-        increment_daily_usage()
-        
-    except Exception as e:
-        logger.error(f"Image analysis error: {e}")
-        reply = "I tried to look at that but my eyes glitched 👁️💫"
-    
-    await msg.reply_text(reply)
-
-def main():
-    # Initialize database on startup
-    init_db()
-    
-    if not TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN not found in environment variables")
-        return
-    
-    if not os.getenv("OPENAI_API_KEY"):
-        logger.error("OPENAI_API_KEY not found in environment variables")
-        return
-    
-    app = ApplicationBuilder().token(TOKEN).build()
-    
-    # Command handlers
-    app.add_handler(CommandHandler("tldr", tldr))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("mood", mood_cmd))
-    app.add_handler(CommandHandler("usage", usage_cmd))
-    app.add_handler(CommandHandler("recon", recon_calc))
-    app.add_handler(CommandHandler("storage", storage_cmd))
-    app.add_handler(CommandHandler("convert", convert_cmd))
-    app.add_handler(CommandHandler("topic", topic_cmd))
-    app.add_handler(CommandHandler("vibe", vibe_cmd))
-    app.add_handler(CommandHandler("resetmood", resetmood))
-    
-    # Message handlers - order matters!
-    # Handle images first (with captions)
-    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image_message))
-    
-    # Handle text messages (this includes storing messages AND AI replies)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message))
-    
-    logger.info("Starting bot...")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main().completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": f"You summarize Telegram group chats like a sassy friend. Keep it natural and conversational, not formal. You're {mood} today. No bullet points - just tell the story of what happened in this topic."},
@@ -736,11 +674,10 @@ async def handle_image_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if not msg:
         return
         
-    # Store the message first
+    # Store the message first if it has a caption
     if msg.caption:
-        # Create a temporary text message for storage
-        temp_msg = msg
-        temp_msg.text = msg.caption
+        # Create a modified update to store the caption as text
+        msg.text = msg.caption
         store_message(update)
         
     # STRICT: Only analyze if explicitly mentioned or direct reply to bot
@@ -825,4 +762,66 @@ Key vibes:
 
 Analyze what you see and respond helpfully in your casual style."""
 
-        completion = client.chat
+        completion = client.chat.completions.create(
+            model="gpt-4o",  # GPT-4 Vision model
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user", 
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": file_url}}
+                    ]
+                }
+            ]
+        )
+        
+        reply = completion.choices[0].message.content.strip()
+        
+        # Increment usage after successful API call
+        increment_daily_usage()
+        
+    except Exception as e:
+        logger.error(f"Image analysis error: {e}")
+        reply = "I tried to look at that but my eyes glitched 👁️💫"
+    
+    await msg.reply_text(reply)
+
+def main():
+    # Initialize database on startup
+    init_db()
+    
+    if not TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN not found in environment variables")
+        return
+    
+    if not os.getenv("OPENAI_API_KEY"):
+        logger.error("OPENAI_API_KEY not found in environment variables")
+        return
+    
+    app = ApplicationBuilder().token(TOKEN).build()
+    
+    # Command handlers
+    app.add_handler(CommandHandler("tldr", tldr))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("mood", mood_cmd))
+    app.add_handler(CommandHandler("usage", usage_cmd))
+    app.add_handler(CommandHandler("recon", recon_calc))
+    app.add_handler(CommandHandler("storage", storage_cmd))
+    app.add_handler(CommandHandler("convert", convert_cmd))
+    app.add_handler(CommandHandler("topic", topic_cmd))
+    app.add_handler(CommandHandler("vibe", vibe_cmd))
+    app.add_handler(CommandHandler("resetmood", resetmood))
+    
+    # Message handlers - order matters!
+    # Handle images first (with captions)
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image_message))
+    
+    # Handle text messages (this includes storing messages AND AI replies)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message))
+    
+    logger.info("Starting bot...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
