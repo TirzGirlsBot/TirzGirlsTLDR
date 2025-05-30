@@ -44,6 +44,21 @@ def init_db():
         message TEXT,
         timestamp TEXT
     )""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS user_preferences (
+        user_id TEXT PRIMARY KEY,
+        nickname TEXT,
+        personality_notes TEXT,
+        last_interaction TEXT,
+        interaction_count INTEGER DEFAULT 0
+    )""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS chat_context (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT,
+        thread_id TEXT,
+        topic TEXT,
+        last_updated TEXT,
+        message_count INTEGER DEFAULT 0
+    )""")
     
     # Track when the bot was last started/updated
     cursor.execute("REPLACE INTO settings (key, value) VALUES (?, ?)", 
@@ -51,16 +66,89 @@ def init_db():
     conn.commit()
     conn.close()
 
-def get_startup_time():
-    """Get when the bot was last started"""
+def store_in_persistent_memory(chat_id, thread_id, user_id, user_name, message):
+    """Store message in persistent database"""
     conn = sqlite3.connect(MEMORY_DB)
     cursor = conn.cursor()
-    cursor.execute("SELECT value FROM settings WHERE key = 'last_startup'")
+    cursor.execute("INSERT INTO memory (chat_id, user_id, user_name, message, timestamp) VALUES (?, ?, ?, ?, ?)", (
+        str(chat_id),
+        str(user_id),
+        user_name,
+        message,
+        datetime.now(timezone.utc).isoformat()
+    ))
+    
+    # Update user interaction count
+    cursor.execute("""INSERT OR REPLACE INTO user_preferences 
+                     (user_id, nickname, personality_notes, last_interaction, interaction_count)
+                     VALUES (?, ?, 
+                             COALESCE((SELECT personality_notes FROM user_preferences WHERE user_id = ?), ''),
+                             ?, 
+                             COALESCE((SELECT interaction_count FROM user_preferences WHERE user_id = ?), 0) + 1)""",
+                   (str(user_id), user_name, str(user_id), datetime.now(timezone.utc).isoformat(), str(user_id)))
+    
+    conn.commit()
+    conn.close()
+
+def get_persistent_messages(chat_id, thread_id, duration_minutes=180):
+    """Get messages from persistent storage"""
+    conn = sqlite3.connect(MEMORY_DB)
+    cursor = conn.cursor()
+    
+    cutoff_time = (datetime.now(timezone.utc) - timedelta(minutes=duration_minutes)).isoformat()
+    
+    cursor.execute("""SELECT user_name, message, timestamp FROM memory 
+                     WHERE chat_id = ? AND timestamp > ? 
+                     ORDER BY timestamp ASC""", 
+                   (str(chat_id), cutoff_time))
+    
+    messages = []
+    for row in cursor.fetchall():
+        user_name, message, timestamp_str = row
+        timestamp = datetime.fromisoformat(timestamp_str)
+        messages.append({
+            "timestamp": timestamp,
+            "user": user_name,
+            "text": message
+        })
+    
+    conn.close()
+    return messages
+
+def get_user_context(user_id):
+    """Get context about a specific user"""
+    conn = sqlite3.connect(MEMORY_DB)
+    cursor = conn.cursor()
+    cursor.execute("SELECT nickname, personality_notes, interaction_count FROM user_preferences WHERE user_id = ?", 
+                   (str(user_id),))
     row = cursor.fetchone()
     conn.close()
+    
     if row:
-        return datetime.fromisoformat(row[0])
-    return datetime.now(timezone.utc)
+        return {
+            "nickname": row[0],
+            "notes": row[1] or "",
+            "interaction_count": row[2] or 0
+        }
+    return {"nickname": None, "notes": "", "interaction_count": 0}
+
+def get_recent_chat_context(chat_id, limit=10):
+    """Get recent context from this chat for better AI responses"""
+    conn = sqlite3.connect(MEMORY_DB)
+    cursor = conn.cursor()
+    
+    # Get recent messages for context
+    cursor.execute("""SELECT user_name, message FROM memory 
+                     WHERE chat_id = ? 
+                     ORDER BY timestamp DESC LIMIT ?""", 
+                   (str(chat_id), limit))
+    
+    recent_messages = []
+    for row in cursor.fetchall():
+        recent_messages.append(f"{row[0]}: {row[1]}")
+    
+    conn.close()
+    return "\n".join(reversed(recent_messages)) if recent_messages else ""
 
 def init_personality():
     init_db()
@@ -108,23 +196,52 @@ def is_on_cooldown(user_id):
     cooldowns[user_id] = now
     return False
 
+def get_startup_time():
+    """Get when the bot was last started"""
+    conn = sqlite3.connect(MEMORY_DB)
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = 'last_startup'")
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return datetime.fromisoformat(row[0])
+    return datetime.now(timezone.utc)
+
 def store_message(update: Update):
     msg = update.message
     if msg and msg.text:
+        # Store in memory for current session
         key = (msg.chat_id, msg.message_thread_id or 0)
         chat_history[key].append({
             "timestamp": datetime.now(timezone.utc),
             "user": msg.from_user.first_name,
             "text": msg.text.strip()
         })
+        
+        # Store in persistent database
+        store_in_persistent_memory(
+            msg.chat_id, 
+            msg.message_thread_id or 0,
+            msg.from_user.id,
+            msg.from_user.first_name,
+            msg.text.strip()
+        )
 
 def get_recent_messages(chat_id, thread_id, duration_minutes=180):
+    # First try in-memory (faster)
     key = (chat_id, thread_id or 0)
     now = datetime.now(timezone.utc)
-    return [
+    memory_msgs = [
         entry for entry in chat_history[key]
         if (now - entry["timestamp"]).total_seconds() <= duration_minutes * 60
     ]
+    
+    # If we have enough in memory, use those
+    if len(memory_msgs) > 5:
+        return memory_msgs
+    
+    # Otherwise get from persistent storage
+    return get_persistent_messages(chat_id, thread_id, duration_minutes)
 
 async def tldr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -247,6 +364,11 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_name = msg.from_user.first_name or "someone"
+    user_id = msg.from_user.id
+    
+    # Get user context and chat history
+    user_context = get_user_context(user_id)
+    chat_context = get_recent_chat_context(msg.chat_id, limit=8)
     
     # Clean the prompt - remove @mentions
     prompt = text
@@ -254,12 +376,41 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt = prompt.replace(f"@{bot_username}", "").strip()
     
     if not prompt:
-        await msg.reply_text(f"👀 I'm here, {user_name} — say something cute.")
+        # Personalized greeting based on interaction count
+        if user_context["interaction_count"] > 10:
+            greeting_options = [
+                f"👀 hey {user_context['nickname'] or user_name}, what's good?",
+                "what's the tea? ☕",
+                "I'm here bestie, spill",
+                "you rang? 💅"
+            ]
+        else:
+            greeting_options = [
+                f"👀 I'm here, {user_name} — say something cute.",
+                "what's up? 💫",
+                "you called?",
+                "I'm listening 👂"
+            ]
+        
+        await msg.reply_text(random.choice(greeting_options))
         return
 
     try:
         mood = init_personality()
+        
+        # Build enhanced context
+        context_info = ""
+        if chat_context:
+            context_info += f"Recent chat context:\n{chat_context}\n\n"
+        
+        if user_context["interaction_count"] > 5:
+            context_info += f"You've talked to {user_name} {user_context['interaction_count']} times before. "
+            if user_context["notes"]:
+                context_info += f"Notes about them: {user_context['notes']} "
+        
         system_prompt = f"""You are Summaria, a sassy group chat member who's been here forever. You're {mood}. 
+
+{context_info}
 
 Key vibes:
 - Talk like you're texting in the group chat, not giving formal responses
@@ -270,6 +421,7 @@ Key vibes:
 - Use your personality but don't announce it
 - Give long responses when needed (advice, explanations, etc.) but keep them natural
 - Short responses for simple things, longer for complex things
+- Reference the chat context naturally if relevant
 
 You're not an assistant, you're just another person in the group who happens to be smart and a little shady."""
         
@@ -281,6 +433,37 @@ You're not an assistant, you're just another person in the group who happens to 
             ]
         )
         reply = completion.choices[0].message.content.strip()
+        
+        # Update user personality notes based on this interaction if it reveals something
+        if len(prompt) > 50:  # Only for substantial messages
+            try:
+                # Quick analysis to update user notes
+                analysis_prompt = f"Based on this message: '{prompt}' - what's one brief personality trait or interest of this person? Answer in 5 words or less, or 'nothing notable' if it's just casual chat."
+                
+                analysis = client.chat.completions.create(
+                    model="gpt-4",
+                    messages=[
+                        {"role": "system", "content": "You analyze messages to identify personality traits or interests. Be very brief."},
+                        {"role": "user", "content": analysis_prompt}
+                    ],
+                    max_tokens=20
+                )
+                
+                trait = analysis.choices[0].message.content.strip()
+                if trait and trait.lower() != "nothing notable":
+                    # Update user notes
+                    current_notes = user_context["notes"]
+                    if trait not in current_notes:
+                        new_notes = f"{current_notes}, {trait}".strip(", ")
+                        conn = sqlite3.connect(MEMORY_DB)
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE user_preferences SET personality_notes = ? WHERE user_id = ?", 
+                                     (new_notes, str(user_id)))
+                        conn.commit()
+                        conn.close()
+            except:
+                pass  # Don't let analysis errors break the main response
+        
     except Exception as e:
         logger.error(f"OpenAI API error: {e}")
         reply = "I tried baby but my brain glitched 🫠"
