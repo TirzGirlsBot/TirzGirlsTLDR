@@ -3,13 +3,14 @@ import logging
 import sqlite3
 import random
 from datetime import datetime, timedelta, timezone
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     ContextTypes,
-    filters
+    filters,
+    CallbackQueryHandler
 )
 from openai import OpenAI
 from collections import defaultdict
@@ -513,22 +514,22 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user_context["notes"]:
                 context_info += f"Notes about them: {user_context['notes']} "
         
-        system_prompt = f"""You are Summaria, a sassy girly group chat member who happens to know about tirz/peptides. You're {mood}. 
+        system_prompt = f"""You are Summaria, a normal girly group chat member who knows about tirz/peptides. You're {mood}. 
 
 {context_info}
 
 Key vibes:
-- You're a fun, girly friend first - peptide expert second
-- Use "lol", "bestie", "babe", "girl", casual slang naturally
-- Be witty, sassy, and conversational like texting friends
-- You know peptides but explain it like a friend, not a textbook
-- Mix helpful info with personality and humor
-- React naturally to things - laugh, be dramatic, etc.
-- Don't always be "professional" - be yourself!
-- You can be sassy, flirty, tired, extra - whatever your mood is
-- Help with tirz stuff but keep it fun and relatable
+- Talk like a NORMAL person texting friends
+- Don't automatically bring up peptides/tirz unless someone actually asks about them
+- If someone asks "how are you?" just answer normally like "good, tired, bored" etc.
+- Have normal conversations about whatever people bring up
+- Only talk peptides when people specifically ask peptide questions
+- Use "lol", "bestie", "babe" casually but don't overdo it  
+- Keep responses natural and casual - like you're actually texting
+- React to what people actually say, don't just default to tirz talk
+- You can chat about fashion, life, random stuff - not just peptides
 
-You're the friend who knows her shit about peptides but is still fun to talk to, not a medical bot."""
+You're a regular friend who happens to know about tirz, not a tirz-obsessed robot."""
         
         completion = client.chat.completions.create(
             model="gpt-4",
@@ -726,14 +727,254 @@ You're the smart friend who actually knows this stuff and helps everyone figure 
 
     await msg.reply_text(reply)
 
+async def mood_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show current personality mood"""
+    current_mood = init_personality()
+    await update.message.reply_text(f"I'm feeling {current_mood} today 💅")
+
+async def usage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show daily usage stats"""
+    current_usage = get_daily_usage()
+    remaining = DAILY_LIMIT - current_usage
+    
+    if remaining > 20:
+        status = "plenty of energy left!"
+    elif remaining > 5:
+        status = "getting a bit tired"
+    else:
+        status = "almost exhausted for today"
+    
+    await update.message.reply_text(
+        f"Daily usage: {current_usage}/{DAILY_LIMIT} ({remaining} left)\n"
+        f"Status: {status} 😴"
+    )
+
+async def recon_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Interactive reconstitution calculator with buttons"""
+    
+    # Create inline keyboard with common vial sizes
+    keyboard = [
+        [
+            InlineKeyboardButton("5mg", callback_data="recon_vial_5"),
+            InlineKeyboardButton("10mg", callback_data="recon_vial_10"),
+            InlineKeyboardButton("15mg", callback_data="recon_vial_15")
+        ],
+        [
+            InlineKeyboardButton("20mg", callback_data="recon_vial_20"),
+            InlineKeyboardButton("25mg", callback_data="recon_vial_25"),
+            InlineKeyboardButton("30mg", callback_data="recon_vial_30")
+        ],
+        [
+            InlineKeyboardButton("Custom", callback_data="recon_custom")
+        ]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "💉 **Reconstitution Calculator**\n\n"
+        "Select your vial size:",
+        reply_markup=reply_markup
+    )
+
+async def recon_bac_selection(vial_mg: float, query: CallbackQuery):
+    """Show BAC water amount selection"""
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("1ml", callback_data=f"recon_calc_{vial_mg}_1"),
+            InlineKeyboardButton("2ml", callback_data=f"recon_calc_{vial_mg}_2"),
+            InlineKeyboardButton("3ml", callback_data=f"recon_calc_{vial_mg}_3")
+        ],
+        [
+            InlineKeyboardButton("4ml", callback_data=f"recon_calc_{vial_mg}_4"),
+            InlineKeyboardButton("5ml", callback_data=f"recon_calc_{vial_mg}_5")
+        ],
+        [
+            InlineKeyboardButton("◀️ Back", callback_data="recon_back")
+        ]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        f"💉 **Reconstitution Calculator**\n\n"
+        f"Vial: {vial_mg}mg\n"
+        f"Select BAC water amount:",
+        reply_markup=reply_markup
+    )
+
+async def show_recon_results(vial_mg: float, bac_ml: float, query: CallbackQuery):
+    """Show final calculation results"""
+    
+    mg_per_ml = vial_mg / bac_ml
+    mg_per_01ml = mg_per_ml * 0.1
+    mg_per_005ml = mg_per_ml * 0.05
+    mg_per_unit = mg_per_01ml / 10
+    
+    # Common dosing examples
+    dose_examples = []
+    for dose in [2.5, 5.0, 7.5, 10.0, 12.5, 15.0]:
+        if dose <= vial_mg:
+            units_needed = dose / mg_per_unit
+            if units_needed <= 100:  # Reasonable pen range
+                dose_examples.append(f"• {dose}mg = {units_needed:.0f} units")
+    
+    keyboard = [
+        [InlineKeyboardButton("🔄 New Calculation", callback_data="recon_restart")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    results_text = (
+        f"💉 **Results: {vial_mg}mg + {bac_ml}ml BAC**\n\n"
+        f"**Concentration:**\n"
+        f"• {mg_per_ml:.1f}mg per 1ml\n"
+        f"• {mg_per_01ml:.2f}mg per 0.1ml\n"
+        f"• {mg_per_unit:.3f}mg per insulin unit\n\n"
+        f"**Common Doses:**\n" + "\n".join(dose_examples[:6])
+    )
+    
+    await query.edit_message_text(results_text, reply_markup=reply_markup)
+
+async def handle_recon_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle all reconstitution calculator button presses"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data.startswith("recon_vial_"):
+        # Vial size selected
+        vial_mg = float(data.split("_")[-1])
+        await recon_bac_selection(vial_mg, query)
+        
+    elif data.startswith("recon_calc_"):
+        # Final calculation
+        parts = data.split("_")
+        vial_mg = float(parts[2])
+        bac_ml = float(parts[3])
+        await show_recon_results(vial_mg, bac_ml, query)
+        
+    elif data == "recon_back":
+        # Go back to vial selection
+        keyboard = [
+            [
+                InlineKeyboardButton("5mg", callback_data="recon_vial_5"),
+                InlineKeyboardButton("10mg", callback_data="recon_vial_10"),
+                InlineKeyboardButton("15mg", callback_data="recon_vial_15")
+            ],
+            [
+                InlineKeyboardButton("20mg", callback_data="recon_vial_20"),
+                InlineKeyboardButton("25mg", callback_data="recon_vial_25"),
+                InlineKeyboardButton("30mg", callback_data="recon_vial_30")
+            ],
+            [
+                InlineKeyboardButton("Custom", callback_data="recon_custom")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "💉 **Reconstitution Calculator**\n\n"
+            "Select your vial size:",
+            reply_markup=reply_markup
+        )
+        
+    elif data == "recon_restart":
+        # Start over
+        await handle_recon_callback(update, context)  # This will trigger the back case
+        
+    elif data == "recon_custom":
+        await query.edit_message_text(
+            "💉 **Custom Calculation**\n\n"
+            "For custom amounts, use:\n"
+            "`/recon [vial_mg] [bac_ml]`\n\n"
+            "Example: `/recon 12.5 2.5`"
+        )
+
+async def storage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Storage reminders"""
+    await update.message.reply_text(
+        "🧊 **Storage Tips**\n\n"
+        "**Unopened vials:** Fridge (36-46°F)\n"
+        "**Reconstituted:** Fridge, use within 28 days\n"
+        "**BAC water:** Room temp or fridge\n"
+        "**Needles:** Cool, dry place\n\n"
+        "Keep away from light and don't freeze! ❄️"
+    )
+
+async def convert_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unit conversions"""
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: /convert [amount] [from] [to]\n"
+            "Example: /convert 5 mg units\n"
+            "Supports: mg, mcg, units, ml"
+        )
+        return
+    
+    try:
+        amount = float(context.args[0])
+        from_unit = context.args[1].lower() if len(context.args) > 1 else "mg"
+        to_unit = context.args[2].lower() if len(context.args) > 2 else "units"
+        
+        # Simple conversions (would need more context for accurate unit conversion)
+        if from_unit == "mg" and to_unit == "mcg":
+            result = amount * 1000
+            await update.message.reply_text(f"{amount}mg = {result}mcg")
+        elif from_unit == "mcg" and to_unit == "mg":
+            result = amount / 1000
+            await update.message.reply_text(f"{amount}mcg = {result}mg")
+        else:
+            await update.message.reply_text(
+                "I can convert mg ↔ mcg easily!\n"
+                "For other conversions, I need more context about your specific vial 💉"
+            )
+    except:
+        await update.message.reply_text("Invalid format! Try: /convert 5 mg mcg")
+
+async def topic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show current topic"""
+    thread_id = update.message.message_thread_id
+    if thread_id:
+        await update.message.reply_text(f"You're in topic ID: {thread_id}")
+    else:
+        await update.message.reply_text("You're in General chat 💬")
+
+async def vibe_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Random sassy response"""
+    vibes = [
+        "living my best life bestie ✨",
+        "thriving and unbothered 💅",
+        "just here being iconic",
+        "serving looks and peptide knowledge",
+        "tired but make it fashion",
+        "manifesting good injection sites",
+        "too blessed to be stressed",
+        "in my peptide era",
+        "hot girl summer vibes only",
+        "booked and busy (with tirz talk)"
+    ]
+    await update.message.reply_text(random.choice(vibes))
+
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = """🔮 **Summaria Commands**
 
-/tldr - Summarize last 3 hours
-/tldr 1h, /tldr 6h, /tldr all - Custom time ranges
-/help - Show this help
+📊 **Summarize:**
+/tldr [1h|3h|6h|all] - Summarize recent chat
 
-Mention me (@{}) or reply to my messages for AI chat! 💅🏾""".format(context.bot.username or "summaria")
+💉 **Tirz Tools:**
+/recon [mg] [ml] - Reconstitution calculator 
+/convert [amount] [from] [to] - Unit conversion
+/storage - Storage reminders
+
+💅 **Fun Stuff:**
+/mood - Check my current vibe
+/vibe - Get random sassy response  
+/usage - Daily energy remaining
+/topic - See what topic you're in
+
+Mention me (@{}) or reply to my messages for AI chat!
+    """.format(context.bot.username or "summaria")
     
     await update.message.reply_text(help_text)
 
